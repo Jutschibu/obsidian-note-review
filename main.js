@@ -135,7 +135,7 @@ class NoteReviewSettingTab extends PluginSettingTab {
         .setPlaceholder('review, remnote')
         .setValue(this.plugin.settings.reviewTags.join(', '))
         .onChange(async value => {
-          this.plugin.settings.reviewTags = value.split(',').map(t => t.trim().replace(/^#/, ''));
+          this.plugin.settings.reviewTags = value.split(',').map(t => t.trim().replace(/^#/, '').toLowerCase());
           await this.plugin.saveSettings();
         }));
   }
@@ -181,13 +181,19 @@ module.exports = class NoteReviewPlugin extends Plugin {
 
   async startReview() {
     const today = new Date().toISOString().split('T')[0];
-    const tags = this.settings.reviewTags;
+    const tags = this.settings.reviewTags.map(t => t.toLowerCase());
     const due = [];
 
     for (const file of this.app.vault.getMarkdownFiles()) {
       const cache = this.app.metadataCache.getFileCache(file);
       const meta = cache?.frontmatter;
-      const fileTags = (cache?.tags || []).map(t => t.tag.replace(/^#/, ''));
+
+      // Tags aus beiden Quellen sammeln: inline #tags und Frontmatter tags-Liste
+      const inlineTags = (cache?.tags || []).map(t => t.tag.replace(/^#/, '').toLowerCase());
+      const frontmatterTags = Array.isArray(meta?.tags)
+        ? meta.tags.map(t => String(t).replace(/^#/, '').toLowerCase())
+        : [];
+      const fileTags = [...new Set([...inlineTags, ...frontmatterTags])];
 
       const hasReviewTag = tags.some(t => fileTags.includes(t));
 
@@ -197,7 +203,8 @@ module.exports = class NoteReviewPlugin extends Plugin {
         });
       }
 
-      const dueDate = this.app.metadataCache.getFileCache(file)?.frontmatter?.['sr-due'];
+      const updatedMeta = this.app.metadataCache.getFileCache(file)?.frontmatter;
+      const dueDate = updatedMeta?.['sr-due'];
       if (!dueDate || dueDate > today) continue;
 
       const content = await this.app.vault.cachedRead(file);
