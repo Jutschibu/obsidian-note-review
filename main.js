@@ -1,6 +1,9 @@
-const { Plugin, Modal, Notice, TFile } = require('obsidian');
+const { Plugin, Modal, Notice, PluginSettingTab, Setting } = require('obsidian');
 
-// SM-2 Algorithmus
+const DEFAULT_SETTINGS = {
+  reviewTags: ['review'],
+};
+
 function sm2(quality, repetitions, easeFactor, interval) {
   if (quality >= 3) {
     if (repetitions === 0) interval = 1;
@@ -14,7 +17,12 @@ function sm2(quality, repetitions, easeFactor, interval) {
   }
   const nextReview = new Date();
   nextReview.setDate(nextReview.getDate() + interval);
-  return { repetitions, easeFactor, interval, nextReview: nextReview.toISOString().split('T')[0] };
+  return {
+    repetitions,
+    easeFactor,
+    interval,
+    nextReview: nextReview.toISOString().split('T')[0],
+  };
 }
 
 class NoteReviewModal extends Modal {
@@ -28,6 +36,18 @@ class NoteReviewModal extends Modal {
   onOpen() {
     this.modalEl.addClass('note-review-modal');
     this.render();
+
+    this.keyHandler = (e) => {
+      if (!e.metaKey) return;
+      const map = { '1': 1, '2': 2, '3': 4, '4': 5 };
+      const quality = map[e.key];
+      if (!quality) return;
+      e.preventDefault();
+      if (this.current < this.notes.length) {
+        this.rate(this.notes[this.current], quality);
+      }
+    };
+    document.addEventListener('keydown', this.keyHandler);
   }
 
   render() {
@@ -35,31 +55,31 @@ class NoteReviewModal extends Modal {
     contentEl.empty();
 
     if (this.current >= this.notes.length) {
-      contentEl.createEl('div', { cls: 'note-review-container' }).createEl('div', { cls: 'note-review-empty' }).innerHTML =
-        '<div class="checkmark">✅</div><p><strong>Alle Notizen für heute erledigt!</strong></p><p>Gut gemacht.</p>';
+      const container = contentEl.createEl('div', { cls: 'note-review-container' });
+      const empty = container.createEl('div', { cls: 'note-review-empty' });
+      empty.createEl('div', { cls: 'checkmark', text: '✅' });
+      empty.createEl('p').createEl('strong', { text: 'Alle Notizen für heute erledigt!' });
+      empty.createEl('p', { text: 'Gut gemacht.' });
       return;
     }
 
     const note = this.notes[this.current];
     const container = contentEl.createEl('div', { cls: 'note-review-container' });
 
-    // Header
     const header = container.createEl('div', { cls: 'note-review-header' });
     header.createEl('h2', { text: 'Notiz-Review' });
     header.createEl('span', { cls: 'note-review-counter', text: `${this.current + 1} / ${this.notes.length}` });
 
-    // Content
     const content = container.createEl('div', { cls: 'note-review-content' });
     content.createEl('div', { cls: 'note-review-title', text: note.basename });
     content.createEl('div', { cls: 'note-review-body', text: note.preview });
 
-    // Buttons
     const buttons = container.createEl('div', { cls: 'note-review-buttons' });
     const ratings = [
-      { label: '🔁 Nochmal', cls: 'btn-again', quality: 1 },
-      { label: '😓 Schwer',  cls: 'btn-hard',  quality: 2 },
-      { label: '👍 Gut',     cls: 'btn-good',  quality: 4 },
-      { label: '⚡ Leicht',  cls: 'btn-easy',  quality: 5 },
+      { label: '🔁 Nochmal  ⌘1', cls: 'btn-again', quality: 1 },
+      { label: '😓 Schwer   ⌘2', cls: 'btn-hard',  quality: 2 },
+      { label: '👍 Gut      ⌘3', cls: 'btn-good',  quality: 4 },
+      { label: '⚡ Leicht   ⌘4', cls: 'btn-easy',  quality: 5 },
     ];
 
     for (const r of ratings) {
@@ -92,38 +112,101 @@ class NoteReviewModal extends Modal {
   }
 
   onClose() {
+    document.removeEventListener('keydown', this.keyHandler);
     this.contentEl.empty();
+  }
+}
+
+class NoteReviewSettingTab extends PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+    containerEl.createEl('h2', { text: 'Note Review Einstellungen' });
+
+    new Setting(containerEl)
+      .setName('Review Tags')
+      .setDesc('Welche Tags sollen für das Review erkannt werden? (kommagetrennt, ohne #)')
+      .addText(text => text
+        .setPlaceholder('review, remnote')
+        .setValue(this.plugin.settings.reviewTags.join(', '))
+        .onChange(async value => {
+          this.plugin.settings.reviewTags = value.split(',').map(t => t.trim().replace(/^#/, ''));
+          await this.plugin.saveSettings();
+        }));
   }
 }
 
 module.exports = class NoteReviewPlugin extends Plugin {
   async onload() {
+    await this.loadSettings();
+    this.addSettingTab(new NoteReviewSettingTab(this.app, this));
+
     this.addRibbonIcon('brain', 'Note Review starten', () => this.startReview());
+
     this.addCommand({
       id: 'start-note-review',
       name: 'Review starten',
       callback: () => this.startReview(),
     });
+
+    this.addCommand({
+      id: 'add-current-note-to-review',
+      name: 'Diese Notiz zum Review hinzufügen',
+      callback: () => this.addCurrentNote(),
+    });
+  }
+
+  async loadSettings() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
+  async saveSettings() {
+    await this.saveData(this.settings);
+  }
+
+  async addCurrentNote() {
+    const file = this.app.workspace.getActiveFile();
+    if (!file) { new Notice('Keine aktive Notiz'); return; }
+    const today = new Date().toISOString().split('T')[0];
+    await this.app.fileManager.processFrontMatter(file, fm => {
+      if (!fm['sr-due']) fm['sr-due'] = today;
+    });
+    new Notice(`✅ "${file.basename}" zum Review hinzugefügt`);
   }
 
   async startReview() {
     const today = new Date().toISOString().split('T')[0];
+    const tags = this.settings.reviewTags;
     const due = [];
 
     for (const file of this.app.vault.getMarkdownFiles()) {
-      const meta = this.app.metadataCache.getFileCache(file)?.frontmatter;
-      if (!meta) continue;
-      const dueDate = meta['sr-due'];
-      if (!dueDate) continue;
-      if (dueDate <= today) {
-        const content = await this.app.vault.cachedRead(file);
-        const body = content.replace(/^---[\s\S]*?---\n/, '').trim();
-        due.push({
-          path: file.path,
-          basename: file.basename,
-          preview: body.slice(0, 800) + (body.length > 800 ? '…' : ''),
+      const cache = this.app.metadataCache.getFileCache(file);
+      const meta = cache?.frontmatter;
+      const fileTags = (cache?.tags || []).map(t => t.tag.replace(/^#/, ''));
+
+      const hasReviewTag = tags.some(t => fileTags.includes(t));
+
+      if (hasReviewTag && !meta?.['sr-due']) {
+        await this.app.fileManager.processFrontMatter(file, fm => {
+          fm['sr-due'] = today;
         });
       }
+
+      const dueDate = this.app.metadataCache.getFileCache(file)?.frontmatter?.['sr-due'];
+      if (!dueDate || dueDate > today) continue;
+
+      const content = await this.app.vault.cachedRead(file);
+      const body = content.replace(/^---[\s\S]*?---\n/, '').trim();
+      due.push({
+        path: file.path,
+        basename: file.basename,
+        preview: body.slice(0, 800) + (body.length > 800 ? '…' : ''),
+      });
     }
 
     if (due.length === 0) {
