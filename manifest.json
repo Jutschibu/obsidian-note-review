@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-note-review",
+  "name": "Note Review",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Spaced repetition for whole notes, RemNote-style.",
+  "author": "Jutschibu",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}
